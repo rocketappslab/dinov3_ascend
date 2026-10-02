@@ -158,7 +158,8 @@ class SmoothedValue:
         """
         if not distributed.is_enabled():
             return
-        t = torch.tensor([self.count, self.total], dtype=torch.float64, device="cuda")
+        # HCCL allreduce does not support float64.
+        t = torch.tensor([self.count, self.total], dtype=torch.float32, device="cuda")
         torch.distributed.barrier()
         torch.distributed.all_reduce(t)
         t = t.tolist()

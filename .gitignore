@@ -3,6 +3,9 @@ dist/
 *.egg-info/
 **/__pycache__/
 
+# Local training runs (checkpoints, logs, metrics)
+outputs/
+
 **/.ipynb_checkpoints
 **/.ipynb_checkpoints/**
 

@@ -1,0 +1,74 @@
+# Short DINOv3 SSL run for a small image folder on Ascend NPU.
+# Defaults assume a handful of images and one NPU. Raise epochs,
+# OFFICIAL_EPOCH_LENGTH, batch size, and NPROC_PER_NODE for a real run.
+MODEL:
+  META_ARCHITECTURE: SSLMetaArch
+  DEVICE: cuda
+  DTYPE: float32
+compute_precision:
+  param_dtype: bf16
+  reduce_dtype: fp32
+  sharding_strategy: SHARD_GRAD_OP
+dino:
+  loss_weight: 1.0
+  head_n_prototypes: 1024
+  head_bottleneck_dim: 64
+  head_hidden_dim: 256
+  head_nlayers: 3
+  koleo_loss_weight: 0.1
+ibot:
+  loss_weight: 1.0
+  separate_head: true
+  head_n_prototypes: 1024
+  head_bottleneck_dim: 64
+  head_hidden_dim: 256
+  head_nlayers: 3
+  mask_ratio_min_max:
+  - 0.1
+  - 0.5
+train:
+  batch_size_per_gpu: 1
+  dataset_path: ImageDir:root=/root/workspace/rocket/Dataset/demo
+  output_dir: outputs/demo_npu
+  num_workers: 0
+  OFFICIAL_EPOCH_LENGTH: 10
+  cache_dataset: false
+  compile: false
+  cudagraphs: false
+  checkpointing: false
+  centering: sinkhorn_knopp
+student:
+  arch: vit_small
+  patch_size: 16
+  drop_path_rate: 0.1
+  layerscale: 1.0e-05
+  ffn_layer: mlp
+  norm_layer: layernorm
+  pos_embed_type: rope
+  pos_embed_rope_dtype: bf16
+teacher:
+  momentum_teacher: 0.996
+  warmup_teacher_temp: 0.04
+  teacher_temp: 0.07
+  warmup_teacher_temp_epochs: 0
+optim:
+  epochs: 1
+  lr: 0.0005
+  warmup_epochs: 0
+  min_lr: 1.0e-06
+  weight_decay: 0.04
+  weight_decay_end: 0.04
+  freeze_last_layer_epochs: 0
+  clip_grad: 3.0
+  scaling_rule: sqrt_wrt_1024
+  layerwise_decay: 0.9
+  multi_tensor_optim: false
+crops:
+  local_crops_number: 4
+  global_crops_size: 224
+  local_crops_size: 96
+evaluation:
+  eval_period_iterations: 10
+checkpointing:
+  period: 10
+  max_to_keep: 2
