@@ -48,11 +48,20 @@ def _parse_dataset_str(dataset_str: str):
 
     name = tokens[0]
     kwargs = {}
+    extras = []
 
     for token in tokens[1:]:
-        key, value = token.split("=")
+        key, value = token.split("=", 1)
         assert key in ("root", "extra", "split")
-        kwargs[key] = value
+        if name == "ImageDir" and key == "extra":
+            extras.append(value)
+        else:
+            kwargs[key] = value
+
+    if len(extras) == 1:
+        kwargs["extra"] = extras[0]
+    elif len(extras) > 1:
+        kwargs["extra"] = extras
 
     if name == "ImageNet":
         class_ = ImageNet

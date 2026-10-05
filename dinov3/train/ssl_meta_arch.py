@@ -13,6 +13,7 @@ from torch import Tensor, nn
 
 import dinov3.distributed as distributed
 from dinov3.checkpointer import init_fsdp_model_from_checkpoint
+from dinov3.checkpointer.timm_backbone import load_timm_dinov3_backbone
 from dinov3.configs import get_default_config
 from dinov3.data import DataAugmentationDINO
 from dinov3.fsdp.ac_compile_parallelize import ac_compile_parallelize
@@ -305,6 +306,9 @@ class SSLMetaArch(nn.Module):
         self.dino_loss.init_weights()
         self.ibot_patch_loss.init_weights()
         self.model_ema.load_state_dict(self.student.state_dict())
+        if self.cfg.student.pretrained_weights:
+            load_timm_dinov3_backbone(self.student, self.cfg.student.pretrained_weights)
+            self.model_ema.load_state_dict(self.student.state_dict())
         if self.has_gram_teacher:
             if self.gram_ckpt is not None:
                 logger.info(f"Loading pretrained weights from {self.gram_ckpt}")

@@ -28,6 +28,7 @@ ibot:
   - 0.5
 train:
   batch_size_per_gpu: 1
+  # Directory, or ImageDir:root=<dir>:extra=<a.csv>,<b.json> for several lists
   dataset_path: ImageDir:root=/root/workspace/rocket/Dataset/demo
   output_dir: outputs/demo_npu
   num_workers: 0
