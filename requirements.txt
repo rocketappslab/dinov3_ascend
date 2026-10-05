@@ -4,6 +4,7 @@ regex
 scikit-learn
 submitit
 termcolor
-torch
+torch==2.10
 torchmetrics
-torchvision
+torchvision==0.25
+torch_npu==2.10

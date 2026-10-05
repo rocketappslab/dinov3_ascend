@@ -43,3 +43,9 @@ ignore = ["E203", "E501"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "hubconf.py" = ["F401"]
+
+
+# [[tool.uv.index]]
+#name= "roma-proxy"
+#url = "http://pip.modelarts.private.com:8888/repository/pypi/simple"
+#authenticate = "never"
