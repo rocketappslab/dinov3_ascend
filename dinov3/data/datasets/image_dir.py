@@ -11,8 +11,21 @@ logger = logging.getLogger("dinov3")
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 _MANIFEST_EXTENSIONS = {".csv", ".json"}
-# Earlier names win when a header contains more than one path column.
+# Earlier names win when a record contains more than one folder or path field.
+_ROOT_KEYS = (
+    "image_folder_root",
+    "image_folder",
+    "image_root",
+    "img_root",
+    "folder_root",
+    "root",
+)
 _PATH_KEYS = (
+    "image_relative_path",
+    "relative_path",
+    "rel_path",
+    "relpath",
+    "image_relpath",
     "path",
     "image_path",
     "img_path",
@@ -24,7 +37,9 @@ _PATH_KEYS = (
     "img",
     "file",
 )
+_ROOT_KEY_RANK = {name: index for index, name in enumerate(_ROOT_KEYS)}
 _PATH_KEY_RANK = {name: index for index, name in enumerate(_PATH_KEYS)}
+_ROOT_KEY_SET = set(_ROOT_KEYS)
 
 
 class ImageDir(ExtendedVisionDataset):
@@ -43,12 +58,23 @@ class ImageDir(ExtendedVisionDataset):
     ``extra`` may be a ``.csv`` or ``.json`` file, a comma-separated list of
     those files, or a directory of them. Paths are concatenated in the order
     given. A JSON object may contain several lists; every list is loaded.
-    CSV rows are paths, or a table whose header names the path column
-    (``path``, ``image``, ``filename``, ``file_name``, and similar).
-    Relative paths are resolved against ``root`` when ``root`` is a directory.
-    When the dataset root is the list file itself, they are resolved against
-    the CSV ``root`` column, or against a sibling folder of the same name
-    (``demo.csv`` next to ``demo/``).
+    Each record can store an image folder and a path relative to that folder.
+    CSV columns (or JSON fields) are ``root`` / ``image_root`` /
+    ``image_folder`` and ``path`` / ``relative_path`` / ``image``. A JSON
+    object may also set one folder for a list of relative paths:
+
+        {"root": "/data/images", "images": ["a.jpg", "nested/b.jpg"]}
+        [{"image_root": "/data/images", "relative_path": "a.jpg"}]
+
+    A relative path with no folder of its own is resolved against ``root``
+    when ``root`` is a directory, otherwise against a sibling folder of the
+    same name (``demo.csv`` next to ``demo/``). An absolute path is used as
+    written. A folder stored on the record wins over the dataset directory.
+
+    ``image_root`` sets the image folder for every relative path in the lists,
+    taking priority over folders stored in the records:
+
+        ImageDir:root=/data/list.csv:image_root=/data/images
 
     Write that CSV from a folder with ``write_image_list`` or:
 
@@ -60,6 +86,7 @@ class ImageDir(ExtendedVisionDataset):
         *,
         root: str,
         extra: Optional[Union[str, Sequence[str]]] = None,
+        image_root: Optional[str] = None,
         split: Optional[str] = None,
         transforms: Optional[Callable] = None,
         transform: Optional[Callable] = None,
@@ -74,7 +101,7 @@ class ImageDir(ExtendedVisionDataset):
             target_decoder=TargetDecoder,
         )
         del split
-        paths, source = _collect_paths(root, extra)
+        paths, source = _collect_paths(root, extra, image_root)
         if not paths:
             raise FileNotFoundError(f"No images found from {source}")
         logger.info("ImageDir loaded %s paths from %s", f"{len(paths):,d}", source)
@@ -91,13 +118,21 @@ class ImageDir(ExtendedVisionDataset):
         return len(self._paths)
 
 
-def _collect_paths(root: str, extra: Optional[Union[str, Sequence[str]]]) -> tuple:
+def _collect_paths(
+    root: str,
+    extra: Optional[Union[str, Sequence[str]]],
+    image_root: Optional[str] = None,
+) -> tuple:
+    if image_root:
+        image_root = image_root.strip()
+        if not os.path.isdir(image_root):
+            raise FileNotFoundError(f"Image folder root not found: {image_root}")
     specs = _manifest_specs(extra)
     if specs:
-        return _load_manifests(root, specs), ",".join(specs)
+        return _load_manifests(root, specs, image_root), ",".join(specs)
     root_specs = _split_spec(root)
     if len(root_specs) > 1 or (root_specs and not os.path.isdir(root_specs[0]) and _looks_like_manifest(root_specs[0])):
-        return _load_manifests(None, root_specs), root
+        return _load_manifests(None, root_specs, image_root), root
     if not os.path.isdir(root):
         raise FileNotFoundError(f"Image directory not found: {root}")
     return _walk_images(root), root
@@ -122,12 +157,12 @@ def _looks_like_manifest(path: str) -> bool:
     return os.path.splitext(path)[1].lower() in _MANIFEST_EXTENSIONS or os.path.isdir(path)
 
 
-def _load_manifests(root: Optional[str], specs: Sequence[str]) -> List[str]:
-    image_root = root if root and os.path.isdir(root) else None
+def _load_manifests(root: Optional[str], specs: Sequence[str], image_root: Optional[str] = None) -> List[str]:
+    dataset_root = root if root and os.path.isdir(root) else None
     paths: List[str] = []
     for spec in specs:
         for manifest in _expand_manifest_input(spec):
-            paths.extend(_load_manifest(manifest, image_root))
+            paths.extend(_load_manifest(manifest, dataset_root, image_root))
     return paths
 
 
@@ -162,19 +197,58 @@ def _fallback_base_dir(manifest: str) -> str:
     return directory
 
 
-def _resolve_path(entry: str, base_dir: str) -> str:
-    entry = entry.strip()
-    if not entry or os.path.isabs(entry):
-        return entry
-    return os.path.join(base_dir, entry)
+def _best_column(header: Sequence[str], rank: dict) -> Optional[int]:
+    matches = [(index, name) for index, name in enumerate(header) if name in rank]
+    if not matches:
+        return None
+    return min(matches, key=lambda item: rank[item[1]])[0]
 
 
-def _load_manifest(path: str, base_dir: Optional[str]) -> List[str]:
+def _best_field(item: dict, rank: dict) -> Optional[str]:
+    lowered = {}
+    for key, value in item.items():
+        if isinstance(key, str):
+            lowered[key.strip().lower()] = value
+    for name in rank:
+        value = lowered.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _folder_base(folder: Optional[str], manifest_dir: str) -> Optional[str]:
+    if not folder or not folder.strip():
+        return None
+    folder = folder.strip()
+    if os.path.isabs(folder):
+        return folder
+    return os.path.normpath(os.path.join(manifest_dir, folder))
+
+
+def _join_image(
+    image: str,
+    folder: Optional[str],
+    dataset_root: Optional[str],
+    manifest: str,
+    image_root: Optional[str] = None,
+) -> str:
+    """Join an image folder root with a relative image path."""
+    image = image.strip()
+    if not image or os.path.isabs(image):
+        return image
+    if image_root:
+        return os.path.join(image_root, image)
+    manifest_dir = os.path.dirname(os.path.abspath(manifest))
+    base = _folder_base(folder, manifest_dir) or dataset_root or _fallback_base_dir(manifest)
+    return os.path.join(base, image)
+
+
+def _load_manifest(path: str, base_dir: Optional[str], image_root: Optional[str] = None) -> List[str]:
     extension = os.path.splitext(path)[1].lower()
     if extension == ".csv":
-        return _paths_from_csv(path, base_dir)
+        return _paths_from_csv(path, base_dir, image_root)
     if extension == ".json":
-        return _paths_from_json(path, base_dir)
+        return _paths_from_json(path, base_dir, image_root)
     raise ValueError(f"Image manifest must be .csv or .json, got {path}")
 
 
@@ -193,30 +267,25 @@ def _csv_rows(path: str) -> List[List[str]]:
         return [row for row in csv.reader(handle, delimiter=delimiter) if any(cell.strip() for cell in row)]
 
 
-def _paths_from_csv(path: str, base_dir: Optional[str]) -> List[str]:
+def _paths_from_csv(path: str, base_dir: Optional[str], image_root: Optional[str] = None) -> List[str]:
     rows = _csv_rows(path)
     if not rows:
         return []
     header = [cell.strip().lower() for cell in rows[0]]
-    matches = [(index, name) for index, name in enumerate(header) if name in _PATH_KEY_RANK]
-    root_column = None
-    if matches:
-        column = min(matches, key=lambda item: _PATH_KEY_RANK[item[1]])[0]
-        data_rows = rows[1:]
-        if "root" in header:
-            root_column = header.index("root")
-    else:
+    column = _best_column(header, _PATH_KEY_RANK)
+    root_column = _best_column(header, _ROOT_KEY_RANK)
+    if column is None:
         column = 0
         data_rows = rows
-    fallback = base_dir or _fallback_base_dir(path)
+        root_column = None
+    else:
+        data_rows = rows[1:]
     paths = []
     for row in data_rows:
         if column >= len(row):
             continue
-        row_base = fallback
-        if base_dir is None and root_column is not None and root_column < len(row) and row[root_column].strip():
-            row_base = row[root_column].strip()
-        resolved = _resolve_path(row[column], row_base)
+        folder = row[root_column].strip() if root_column is not None and root_column < len(row) else None
+        resolved = _join_image(row[column], folder, base_dir, path, image_root)
         if resolved:
             paths.append(resolved)
     return paths
@@ -226,25 +295,28 @@ def _extract_path(item: Any) -> Optional[str]:
     if isinstance(item, str):
         return item
     if isinstance(item, dict):
-        matches = [(key, item[key]) for key in _PATH_KEYS if isinstance(item.get(key), str) and item[key].strip()]
-        if matches:
-            return min(matches, key=lambda item: _PATH_KEY_RANK[item[0]])[1]
+        return _best_field(item, _PATH_KEY_RANK)
     return None
 
 
-def _paths_from_json(path: str, base_dir: Optional[str]) -> List[str]:
+def _extract_root(item: Any) -> Optional[str]:
+    if isinstance(item, dict):
+        return _best_field(item, _ROOT_KEY_RANK)
+    return None
+
+
+def _paths_from_json(path: str, base_dir: Optional[str], image_root: Optional[str] = None) -> List[str]:
     with open(path, encoding="utf-8-sig") as handle:
         payload = json.load(handle)
-    if base_dir is None:
-        file_root = payload.get("root") if isinstance(payload, dict) else None
-        base_dir = file_root.strip() if isinstance(file_root, str) and file_root.strip() else _fallback_base_dir(path)
+    file_root = _extract_root(payload)
     items = _json_items(payload, path)
     paths = []
     for item in items:
         extracted = _extract_path(item)
         if extracted is None:
             continue
-        resolved = _resolve_path(extracted, base_dir)
+        folder = _extract_root(item) or file_root
+        resolved = _join_image(extracted, folder, base_dir, path, image_root)
         if resolved:
             paths.append(resolved)
     return paths
@@ -263,7 +335,13 @@ def _json_items(payload: Any, path: str) -> List[Any]:
         if _extract_path(payload):
             return [payload]
         if payload and all(isinstance(value, str) for value in payload.values()):
-            return list(payload.values())
+            values = [
+                value
+                for key, value in payload.items()
+                if str(key).strip().lower() not in _ROOT_KEY_SET
+            ]
+            if values:
+                return values
     raise ValueError(
         f"Unsupported JSON manifest {path}: expected a list of paths, "
         "lists of objects with a path field, or an object containing one or more lists"
@@ -308,11 +386,11 @@ def write_image_list(root: str, output: str, relative: bool = True) -> int:
         os.makedirs(output_dir, exist_ok=True)
     with open(output, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["root", "path"])
+        writer.writerow(["path"])
         for path in paths:
             if relative:
                 path = os.path.relpath(path, image_root)
-            writer.writerow([image_root, path])
+            writer.writerow([path])
     logger.info("Wrote %s image paths to %s", f"{len(paths):,d}", output)
     return len(paths)
 

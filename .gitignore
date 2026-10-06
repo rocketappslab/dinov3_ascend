@@ -19,3 +19,8 @@ outputs/
 
 # Ignore vscode directory
 .vscode/
+
+# Ignore dataset
+Dataset/
+
+*.out

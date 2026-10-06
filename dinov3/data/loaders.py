@@ -52,7 +52,7 @@ def _parse_dataset_str(dataset_str: str):
 
     for token in tokens[1:]:
         key, value = token.split("=", 1)
-        assert key in ("root", "extra", "split")
+        assert key in ("root", "extra", "split", "image_root")
         if name == "ImageDir" and key == "extra":
             extras.append(value)
         else:

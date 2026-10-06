@@ -379,6 +379,40 @@ def build_multi_resolution_data_loader_from_cfg(
     return data_loader
 
 
+def set_epoch_length_from_dataset(cfg) -> None:
+    """Set one official epoch to one pass over the dataset.
+
+    The loader drops the last partial batch, so the step count is
+    ``num_images // global_batch``. Iterable datasets keep the configured length.
+    Must run before the model and the schedulers are built; both read this value.
+    """
+    if cfg.multidistillation.enabled:
+        global_batch_size = int(cfg.multidistillation.global_batch_size)
+    else:
+        global_batch_size = int(cfg.train.batch_size_per_gpu) * distributed.get_world_size()
+    dataset = make_dataset(dataset_str=cfg.train.dataset_path)
+    try:
+        if isinstance(dataset, torch.utils.data.IterableDataset):
+            logger.info(
+                "Iterable dataset; keeping OFFICIAL_EPOCH_LENGTH=%s",
+                cfg.train.OFFICIAL_EPOCH_LENGTH,
+            )
+            return
+        n_images = len(dataset)
+    finally:
+        del dataset
+    epoch_length = max(1, n_images // global_batch_size)
+    logger.info(
+        "OFFICIAL_EPOCH_LENGTH %s -> %d (%s images, global batch %d, %s optimizer steps)",
+        cfg.train.OFFICIAL_EPOCH_LENGTH,
+        epoch_length,
+        f"{n_images:,d}",
+        global_batch_size,
+        f"{epoch_length * int(cfg.optim.epochs):,d}",
+    )
+    cfg.train.OFFICIAL_EPOCH_LENGTH = epoch_length
+
+
 def do_train(cfg, model, resume=False):
     process_subgroup = distributed.get_process_subgroup()
     ckpt_dir = Path(cfg.train.output_dir, "ckpt").expanduser()
@@ -600,6 +634,7 @@ def main(argv=None):
             output=os.path.join(os.path.abspath(args.output_dir), "nan_logs"),
             name="nan_logger",
         )
+    set_epoch_length_from_dataset(cfg)
     meta_arch = {
         "SSLMetaArch": SSLMetaArch,
         "MultiDistillationMetaArch": MultiDistillationMetaArch,
