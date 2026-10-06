@@ -71,10 +71,13 @@ class ImageDir(ExtendedVisionDataset):
     same name (``demo.csv`` next to ``demo/``). An absolute path is used as
     written. A folder stored on the record wins over the dataset directory.
 
-    ``image_root`` sets the image folder for every relative path in the lists,
-    taking priority over folders stored in the records:
+    ``image_root`` is the image folder joined with every relative path. It
+    wins over a folder stored on a record. One folder applies to every list.
+    Several lists can each use their own folder: pass the folders in the same
+    order as the lists.
 
         ImageDir:root=/data/list.csv:image_root=/data/images
+        ImageDir:root=/data/a.csv,/data/b.csv:image_root=/data/images_a,/data/images_b
 
     Write that CSV from a folder with ``write_image_list`` or:
 
@@ -118,15 +121,40 @@ class ImageDir(ExtendedVisionDataset):
         return len(self._paths)
 
 
+def _image_roots(image_root: Optional[str]) -> List[str]:
+    if image_root is None or not str(image_root).strip():
+        return []
+    roots = _split_spec(str(image_root))
+    for folder in roots:
+        if not os.path.isdir(folder):
+            raise FileNotFoundError(f"Image folder root not found: {folder}")
+    return roots
+
+
+def _roots_for_manifests(image_root: Optional[str], count: int) -> List[Optional[str]]:
+    """Pair image folders with lists.
+
+    One folder is used for every list. Several folders must line up with the
+    lists in the same order.
+    """
+    roots = _image_roots(image_root)
+    if not roots:
+        return [None] * count
+    if len(roots) == 1:
+        return roots * count
+    if len(roots) != count:
+        raise ValueError(
+            f"Got {len(roots)} image folder roots for {count} lists; "
+            "pass one folder per list, in the same order, or a single folder for all lists"
+        )
+    return list(roots)
+
+
 def _collect_paths(
     root: str,
     extra: Optional[Union[str, Sequence[str]]],
     image_root: Optional[str] = None,
 ) -> tuple:
-    if image_root:
-        image_root = image_root.strip()
-        if not os.path.isdir(image_root):
-            raise FileNotFoundError(f"Image folder root not found: {image_root}")
     specs = _manifest_specs(extra)
     if specs:
         return _load_manifests(root, specs, image_root), ",".join(specs)
@@ -135,6 +163,8 @@ def _collect_paths(
         return _load_manifests(None, root_specs, image_root), root
     if not os.path.isdir(root):
         raise FileNotFoundError(f"Image directory not found: {root}")
+    if len(_image_roots(image_root)) > 1:
+        raise ValueError("Multiple image folder roots need one list per folder")
     return _walk_images(root), root
 
 
@@ -159,10 +189,13 @@ def _looks_like_manifest(path: str) -> bool:
 
 def _load_manifests(root: Optional[str], specs: Sequence[str], image_root: Optional[str] = None) -> List[str]:
     dataset_root = root if root and os.path.isdir(root) else None
-    paths: List[str] = []
+    manifests: List[str] = []
     for spec in specs:
-        for manifest in _expand_manifest_input(spec):
-            paths.extend(_load_manifest(manifest, dataset_root, image_root))
+        manifests.extend(_expand_manifest_input(spec))
+    folders = _roots_for_manifests(image_root, len(manifests))
+    paths: List[str] = []
+    for manifest, folder in zip(manifests, folders):
+        paths.extend(_load_manifest(manifest, dataset_root, folder))
     return paths
 
 

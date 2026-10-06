@@ -48,9 +48,9 @@ gram:
   compute_stats: false
 train:
   batch_size_per_gpu: 16
-  # Directory, a CSV/JSON list of folder-root + relative path, or
-  # ImageDir:root=<dir>:extra=<a.csv>,<b.json> for several lists.
-  # scripts/train_npu.sh overrides this from IMAGE_DIR / IMAGE_LIST.
+  # Directory, a CSV/JSON list, or several lists with one image folder each:
+  # ImageDir:root=<a.csv>,<b.csv>:image_root=<images_a>,<images_b>
+  # scripts/train_npu.sh overrides this from IMAGE_DIR / IMAGE_ROOT / IMAGE_LIST.
   
   dataset_path: ImageDir:root=/root/workspace/rocket/Dataset/demo2.csv
   output_dir: outputs/vit7b16_npu

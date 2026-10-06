@@ -10,6 +10,8 @@
 #   IMAGE_DIR=/path/to/list.csv   # rows pair an image folder root with a relative path
 #   IMAGE_DIR=/path/to/list.csv IMAGE_ROOT=/path/to/images bash scripts/train_npu.sh
 #     # IMAGE_ROOT is joined with each relative path in the IMAGE_DIR / IMAGE_LIST lists
+#   IMAGE_DIR=/path/a.csv,/path/b.csv IMAGE_ROOT=/path/images_a,/path/images_b bash scripts/train_npu.sh
+#     # one image folder per list, same order. One IMAGE_ROOT still applies to every list
 #   PRETRAINED_WEIGHTS=/path/to/timm_dinov3 bash scripts/train_npu.sh
 #
 # Multi-node (scripts/cluster_train.sh sets these from the cluster job):
@@ -68,7 +70,23 @@ if [[ -n "${IMAGE_LIST}" ]]; then
         exit 1
     fi
     DATASET_PATH="ImageDir:root=${IMAGE_DIR}:extra=${IMAGE_LIST}"
-elif [[ -d "${IMAGE_DIR}" || -f "${IMAGE_DIR}" || "${IMAGE_DIR}" == *,* ]]; then
+elif [[ "${IMAGE_DIR}" == *,* ]]; then
+    IFS=',' read -r -a IMAGE_DIRS <<< "${IMAGE_DIR}"
+    IMAGE_DIR_JOINED=""
+    for list in "${IMAGE_DIRS[@]}"; do
+        list="${list#"${list%%[![:space:]]*}"}"
+        list="${list%"${list##*[![:space:]]}"}"
+        if [[ -z "${list}" ]]; then
+            continue
+        fi
+        if [[ ! -e "${list}" ]]; then
+            echo "Image list does not exist: ${list}" >&2
+            exit 1
+        fi
+        IMAGE_DIR_JOINED="${IMAGE_DIR_JOINED:+${IMAGE_DIR_JOINED},}${list}"
+    done
+    DATASET_PATH="ImageDir:root=${IMAGE_DIR_JOINED}"
+elif [[ -d "${IMAGE_DIR}" || -f "${IMAGE_DIR}" ]]; then
     DATASET_PATH="ImageDir:root=${IMAGE_DIR}"
 else
     echo "Image directory or list does not exist: ${IMAGE_DIR}" >&2
@@ -76,11 +94,23 @@ else
 fi
 
 if [[ -n "${IMAGE_ROOT}" ]]; then
-    if [[ ! -d "${IMAGE_ROOT}" ]]; then
-        echo "Image folder root does not exist: ${IMAGE_ROOT}" >&2
-        exit 1
+    IFS=',' read -r -a IMAGE_ROOTS <<< "${IMAGE_ROOT}"
+    IMAGE_ROOT_JOINED=""
+    for folder in "${IMAGE_ROOTS[@]}"; do
+        folder="${folder#"${folder%%[![:space:]]*}"}"
+        folder="${folder%"${folder##*[![:space:]]}"}"
+        if [[ -z "${folder}" ]]; then
+            continue
+        fi
+        if [[ ! -d "${folder}" ]]; then
+            echo "Image folder root does not exist: ${folder}" >&2
+            exit 1
+        fi
+        IMAGE_ROOT_JOINED="${IMAGE_ROOT_JOINED:+${IMAGE_ROOT_JOINED},}${folder}"
+    done
+    if [[ -n "${IMAGE_ROOT_JOINED}" ]]; then
+        DATASET_PATH="${DATASET_PATH}:image_root=${IMAGE_ROOT_JOINED}"
     fi
-    DATASET_PATH="${DATASET_PATH}:image_root=${IMAGE_ROOT}"
 fi
 
 if [[ -n "${PRETRAINED_WEIGHTS}" && ! -e "${PRETRAINED_WEIGHTS}" ]]; then

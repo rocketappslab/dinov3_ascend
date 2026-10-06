@@ -6,10 +6,14 @@
 # Overrides (job environment or the shell):
 #   S3_WEIGHTS=s3://bucket-6417/rocket/model/timm/vit_7b_patch16_dinov3.lvd1689m
 #   S3_IMAGE_DIR=s3://bucket-6417/rocket/Dataset/demo.csv
+#   S3_IMAGE_DIR=s3://.../a.csv,s3://.../b.csv
 #   S3_IMAGE_LIST=s3://.../a.csv,s3://.../b.json
 #   S3_IMAGE_ROOT=s3://bucket-6417/rocket/Dataset/demo   # empty: use folders in the lists
+#   S3_IMAGE_ROOT=s3://.../images_a,s3://.../images_b    # one folder per list, same order
 #   IMAGE_DIR=/cache/demo.csv
+#   IMAGE_DIR=/cache/a.csv,/cache/b.csv
 #   IMAGE_ROOT=/cache/demo
+#   IMAGE_ROOT=/cache/images_a,/cache/images_b
 #   IMAGE_LIST=/cache/a.csv,/cache/b.json
 #   PRETRAINED_WEIGHTS=/cache/vit_7b_patch16_dinov3.lvd1689m
 #   OUTPUT_DIR=/cache/exp/dinov3_vit7b16_pretrain_npu
@@ -28,11 +32,11 @@ S3_IMAGE_LIST="${S3_IMAGE_LIST:-}"
 S3_IMAGE_ROOT="${S3_IMAGE_ROOT-${S3_BUCKET}/Dataset/demo}"
 
 CACHE_ROOT="${CACHE_ROOT:-/cache}"
-PRETRAINED_WEIGHTS="${PRETRAINED_WEIGHTS:-${CACHE_ROOT}/vit_7b_patch16_dinov3.lvd1689m}"
-IMAGE_DIR="${IMAGE_DIR:-}"
-IMAGE_ROOT="${IMAGE_ROOT:-}"
+PRETRAINED_WEIGHTS="${PRETRAINED_WEIGHTS:-/efs/rocket/Model/timm/vit_7b_patch16_dinov3.lvd1689m}"
+IMAGE_DIR="${IMAGE_DIR:-/efs/rocket/Dataset/nanfang_capsule/v2_plus_v1sb.csv,/efs/rocket/Dataset/Gastronet-5M-2/train.csv}"
+IMAGE_ROOT="${IMAGE_ROOT:-/efs/rocket/Dataset/nanfang_capsule/v2_plus_v1sb,/efs/rocket/Dataset/Gastronet-5M-2}"
 IMAGE_LIST="${IMAGE_LIST:-}"
-OUTPUT_DIR="${OUTPUT_DIR:-${CACHE_ROOT}/exp/dinov3_vit7b16_pretrain_npu}"
+OUTPUT_DIR="${OUTPUT_DIR:-${train_url}/exp/dinov3_vit7b16_pretrain_npu}"
 
 copy_obs() {
     local src="$1"
@@ -50,17 +54,36 @@ if [[ ! -e "${PRETRAINED_WEIGHTS}" ]]; then
     copy_obs "${S3_WEIGHTS}" "${PRETRAINED_WEIGHTS}"
 fi
 
+# Copy one s3 path, or a comma-separated list, into CACHE_ROOT.
+# Prints the local path list in the same order.
+stage_spec() {
+    local spec="$1"
+    local joined="" src dst
+    IFS=',' read -r -a _parts <<< "${spec}"
+    for src in "${_parts[@]}"; do
+        src="${src#"${src%%[![:space:]]*}"}"
+        src="${src%"${src##*[![:space:]]}"}"
+        if [[ -z "${src}" ]]; then
+            continue
+        fi
+        dst="${CACHE_ROOT}/$(basename "${src%/}")"
+        if [[ ! -e "${dst}" ]]; then
+            copy_obs "${src}" "${dst}"
+        fi
+        joined="${joined:+${joined},}${dst}"
+    done
+    printf '%s\n' "${joined}"
+}
+
 if [[ -z "${IMAGE_DIR}" ]]; then
-    IMAGE_DIR="${CACHE_ROOT}/$(basename "${S3_IMAGE_DIR%/}")"
-fi
-if [[ ! -e "${IMAGE_DIR}" ]]; then
+    IMAGE_DIR="$(stage_spec "${S3_IMAGE_DIR}")"
+elif [[ "${IMAGE_DIR}" != *,* && ! -e "${IMAGE_DIR}" ]]; then
     copy_obs "${S3_IMAGE_DIR}" "${IMAGE_DIR}"
 fi
 
 if [[ -z "${IMAGE_ROOT}" && -n "${S3_IMAGE_ROOT}" ]]; then
-    IMAGE_ROOT="${CACHE_ROOT}/$(basename "${S3_IMAGE_ROOT%/}")"
-fi
-if [[ -n "${IMAGE_ROOT}" && ! -e "${IMAGE_ROOT}" ]]; then
+    IMAGE_ROOT="$(stage_spec "${S3_IMAGE_ROOT}")"
+elif [[ -n "${IMAGE_ROOT}" && "${IMAGE_ROOT}" != *,* && ! -e "${IMAGE_ROOT}" ]]; then
     copy_obs "${S3_IMAGE_ROOT}" "${IMAGE_ROOT}"
 fi
 
